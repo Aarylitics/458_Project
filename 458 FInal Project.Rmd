@@ -1,0 +1,329 @@
+---
+title: "BUS 458 Final Project"
+author: "Aaryan"
+date: "2023-12-08"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(caret)
+library(estimatr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(car)
+library(corrplot)
+library(readxl)
+library(mice)
+library(knitr)
+```
+
+# Load up data
+```{r data load}
+kaggle <- read.csv("kaggle.csv")
+str(kaggle)
+```
+
+# Move columns around to make data cleaning easier
+
+```{r data relocation}
+kaggle <- kaggle %>% 
+  relocate('Highest.Level.of.Formal.Education', .before = 'Helpful.University') %>% 
+  relocate('ML.Hubs...Repositories.Used', .before = 'Highest.Level.of.Formal.Education')
+```
+
+# Clean up data {.tabset .tabset-fade .tabset-pills}
+
+## Binary clean up
+```{r data clean binary}
+#Give binary variables 1 and 0
+kaggle <- kaggle %>% 
+  mutate_at(vars(15:57),~ifelse(. == "", 0, 1))
+
+kaggle <- kaggle %>% #columns 5 to binary
+  mutate(Student = ifelse(Student == "Yes", 1,0))
+```
+
+## Ordinal/Factor Clean up
+```{r data clean factor}
+#Turn our ordinal variables into factor (character currently)
+kaggle <- kaggle %>%
+  mutate(across(c(2:4, 6:14), as.factor))
+
+#Turn our predictor into compensation (currently a bin variable)
+kaggle$Compensation <- as.factor(kaggle$Compensation)
+
+#Add in NA values for empty cells. Will make imputation easier
+kaggle <- kaggle %>%
+  mutate_at(c("Compensation"), ~na_if(., ""))
+
+#print out our changes
+str(kaggle)
+```
+# Plot out data
+
+```{r plot, warning=FALSE}
+#plot our stuff. Truthfully go this from chat gpt
+create_distribution_chart <- function(variable) {
+  ggplot(kaggle, aes(x = !!sym(variable))) +
+    geom_histogram(binwidth = 1, fill = "lightseagreen", color = "turquoise4", alpha = 0.7, stat = 'count') +
+    labs(title = paste("Distribution Chart -", variable),
+         x = variable,
+         y = "Frequency")}
+
+# Get the list of variable names
+variable_names <- names(kaggle)
+
+# Create distribution charts for all variables
+charts <- purrr::map(variable_names, create_distribution_chart)
+
+# Print or display the charts (you can use other functions like ggsave to save them to files)
+print(charts)
+```
+
+we see that 66% of our data has nulls for our predictor variable. Personally I do not want to lose out on 67% of data. Will imputate
+
+# Compensation variable reworking {.tabset .tabset-fade .tabset-pills}
+
+## Turn compensation into a continuous variable
+
+```{r rng}
+#turn our bins into continuous numbers. We set a range/bounds for our data, and then take a random number within that bounds and assign it to a value
+kaggle <- kaggle %>% 
+  mutate(across(1,~ifelse(. == "$0-999", runif(1112,250,999),
+       ifelse(.== "1,000-1,999", runif(444,1250,1999),
+        ifelse(.=="2,000-2,999", runif(271,2250,2999),
+         ifelse(.=="3,000-3,999", runif(244,3250,3999),
+           ifelse(.=="4,000-4,999", runif(234,4250,4999),
+            ifelse(.=="5,000-7,499", runif(391,5000,7499),
+             ifelse(.=="7,500-9,999", runif(362,7500,9999),
+              ifelse(.=="10,000-14,999", runif(493,10000,14999),
+                 ifelse(.=="15,000-19,999", runif(299,15000,19999),
+                  ifelse(.=="20,000-24,999", runif(337,20000,24999),
+                     ifelse(.=="25,000-29,999", runif(277,25000,29999),
+                       ifelse(.=="30,000-39,999", runif(464,30000,39999),
+                         ifelse(.=="40,000-49,999", runif(421,40000,49999),
+                             ifelse(.=="50,000-59,999", runif(366,50000,59999),
+                              ifelse(.=="60,000-69,999", runif(318,60000,69999),
+                                 ifelse(.=="70,000-79,999", runif(289,70000,79999),
+                                    ifelse(.=="80,000-89,999", runif(222,80000,89999),
+                                     ifelse(.=="90,000-99,999", runif(197,90000,99999),
+                                        ifelse(.=="100,000-124,999", runif(493,100000,124999),
+                                          ifelse(.=="125,000-149,999", runif(269,125000,149999),
+                                            ifelse(.=="150,000-199,999", runif(342,150000,199999),
+                                               ifelse(.=="200,000-249,999", runif(155,200000,249999),
+                                                  ifelse(.=="250,000-299,999", runif(78,250000,299999),
+                                                         ifelse(.=="300,000-499,999", runif(76,300000,499999),
+                                                                ifelse(.=="$500,000-999,999", runif(48,500000,999999),
+                                                                       ifelse(.==">$1,000,000", runif(23,1000000,3000000),0))))))))))))))))))))))))))))
+```
+
+did this method to make sure variability is not reduced. If we used median or mean, we would have numerous observations of the same value, which decreases variability a lot. Variability is needed for OLS assumptions
+
+## Imputate null values
+```{r data imputation using mice}
+set.seed(458)
+
+# an imputation model
+impute_model <- mice(kaggle, m = 3, maxit = 5, meth = "cart", target = "Compensation")
+
+#Generate imputed datasets
+kaggle <- complete(impute_model)
+```
+
+This mice method uses cart, which creates a regression for each of the variables to make sure it accurately imputes. Did not wanna use k-means, as it would give less variability.
+
+# Export CSV out and save
+```{r data export}
+write.csv(kaggle, "kaggleContinuous(1).csv")
+```
+
+I have kaggleContinuous.csv. Instead of overwriting that csv, I added a (1) so new data would be there
+
+# Create our new plots {.tabset .tabset-fade .tabset-pills}
+
+## Distribution
+```{r new plot, warning=FALSE}
+create_distribution_chart <- function(variable) {
+  # Calculate frequencies and percentages
+  data_summary <- kaggle %>%
+    group_by(!!sym(variable)) %>%
+    summarise(count = n()) %>%
+    mutate(percentage = count / sum(count) * 100)
+
+  ggplot(data_summary, aes(x = !!sym(variable), y = percentage)) +
+    geom_bar(stat = 'identity', fill = "#1d9da5", color = "#449999", alpha = 0.7) +
+    geom_text(aes(label = sprintf("%.1f%%", percentage)),
+              position = position_stack(vjust = 0.5),
+              size = 3) +
+    labs(title = paste("Distribution Chart -", variable),
+         x = variable,
+         y = "Percentage") +
+    scale_y_continuous(labels = scales::percent_format(scale = 1))
+}
+
+# Get the list of variable names
+variable_names <- names(kaggle)
+
+# Create distribution charts for all variables
+charts <- purrr::map(variable_names, create_distribution_chart)
+
+# Print or display the charts (you can use other functions like ggsave to save them to files)
+print(charts)
+```
+
+notice our new distributions. So much prettier.
+
+## Correlation
+```{r corr matrix, warning=FALSE}
+#select numeric values --> only those work for cor plots
+kaggle1 <- kaggle %>% 
+  dplyr::select_if(is.numeric)
+
+cor <- cor(kaggle1)
+
+corrplot(cor, method="color", col=colorRampPalette(c("gray27","white","#449999"))(100),cl.lim=c(0,1), tl.col = '#1d9da5')
+```
+
+# Data modeling {.tabset .tabset-fade .tabset-pills}
+
+## initial model
+
+```{r initial model test, results='hide'}
+lm <- lm(Compensation~., data = kaggle)
+
+summary(lm)
+
+vif(lm)
+```
+
+r^2 of .23 is not too bad. But definitely a lot missing. Based off the vif, there is  a lot of inflation between our variables and their variances. I will be getting rid of `Published.Academic.Research.Papers, How.many.individuals.are.responsible, Company.Size,Years.Used.Machine.Learning, Similar.Title, and Industry.of.Work`. This gets rid of 6 variables.
+
+```{r remove inflated variables}
+#removes inflated variables
+kaggle <- kaggle %>% 
+  select(-c(Published.Academic.Research.Papers, How.many.individuals.are.responsible, Company.Size,Years.Used.Machine.Learning, Similar.Title, Industry.of.Work))
+```
+
+```{r recheck model, results='hide'}
+lm <- lm(Compensation~., data = kaggle)
+
+summary(lm)
+
+vif(lm)
+```
+
+r^2 dropped by 1 point, which isnt marignally large. VIF looks way better, but im keeping years programming in (VIF of 24, our highest currently). I also completely forgot to check for outliers. Compensation as a good sporatic few from 500000 to max numbers. Lets get rid of those
+
+### outlier removal
+```{r outlier removal, results='hide'}
+#filter out observations with compensation 500,000 and above
+kaggle <- kaggle %>% 
+  filter(Compensation <= 500000)
+
+#want to see new model
+
+summary(lm(Compensation~., data = kaggle))
+```
+
+r^2 increased to .46. A huuuge upgrade. Nice
+
+## data partition
+```{r data partition}
+set.seed(458)
+
+train_indices <- createDataPartition(kaggle$Compensation, p = 0.6, list = FALSE)
+trainData <- kaggle[train_indices, ]
+tempData <- kaggle[-train_indices,]
+
+validation_indices <- createDataPartition(tempData$Compensation, p = .5, list = FALSE, times = 1)
+validationData <- tempData[validation_indices, ]
+
+test_indices <- createDataPartition(validationData$Compensation, p = .5, list = FALSE, times = 1)
+testData <- tempData[validation_indices,]
+```
+
+## model creation
+```{r training regression model, results='hide'}
+lmTrain <- lm(Compensation~., data = trainData)
+
+summary(lmTrain)
+```
+
+```{r tidy training model output}
+lm(Compensation~., data = trainData) %>%
+  tidy() %>%
+  kable()
+```
+
+
+```{r validation regression model, results='hide'}
+lmVal <- lm(Compensation~., data = validationData)
+
+summary(lmVal)
+```
+
+```{r tidy validate model output}
+lm(Compensation~., data = validationData) %>%
+  tidy() %>%
+  kable()
+```
+
+```{r test regression model, results='hide'}
+lmTest <- lm(Compensation~., data = testData)
+
+summary(lmTest)
+```
+
+```{r tidy test model output}
+lm(Compensation~., data = testData) %>%
+  tidy() %>%
+  kable()
+```
+
+r^2 values are very close to one another, good model
+
+# model play-around
+
+```{r model play around, results='hide'}
+kaggleCon <- read.csv("kaggleContinuous.csv")
+
+#make sure its a factor
+kaggleCon <- kaggleCon %>%
+  mutate(across(c(2:4, 6:14), as.factor))
+
+#filter out the outliers
+#selected_contries <- c("United States of America", "Australia", "France", "Canada", "Germany", "Ireland", "Italy", "India", "Japan", "Portugal", "South Korea", "Spain", "Hong Kong (S.A.R.)", "United Arab Emirates","United Kingdom of Great Britain and Northern Ireland" )
+
+kaggleCon <- kaggleCon %>% 
+  filter(Compensation <= 500000) %>% 
+  filter(!Gender == "Prefer to self-describe")
+
+#kaggleCon <- kaggleCon[kaggleCon$Country %in% selected_contries, ]
+
+
+#deselect inflated variables from dataset
+kaggleCon <- kaggleCon %>% 
+  select(-c(Published.Academic.Research.Papers, How.many.individuals.are.responsible, Company.Size,Years.Used.Machine.Learning, Industry.of.Work))
+
+#model
+lm <- lm(Compensation~.,data = kaggleCon)
+
+summary(lm)
+
+vif(lm)
+
+```
+
+```{r predict and compare, results='hide'}
+predict(lm, newdata = kaggleCon)
+```
+
+# Limitations
+  1) I wanted to get rid of demographic bias from intercept, but time constraints
